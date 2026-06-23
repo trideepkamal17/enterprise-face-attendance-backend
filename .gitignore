@@ -1,10 +1,15 @@
-@"
 node_modules/
 .env
 .env.local
-uploads/
+.env.production
+!.env.example
+!.env.local.example
+!.env.production.example
 logs/
+*.log
+coverage/
 dist/
 build/
-*.log
-"@ | Set-Content .gitignore
+uploads/*
+!uploads/.gitkeep
+.DS_Store

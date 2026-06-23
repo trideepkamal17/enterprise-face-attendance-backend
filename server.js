@@ -3,43 +3,48 @@ const cors = require('cors');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 const pool = require('./db');
 
 const app = express();
+app.disable('x-powered-by');
+app.set('trust proxy', 1);
 
-// app.use(cors());
+const uploadDir = path.join(__dirname, 'uploads');
+fs.mkdirSync(uploadDir, { recursive: true });
 
-const allowedOrigins = [
-  'http://localhost:5173',
-  'http://localhost:3000',
-  'https://yourstaffing.online',
-  'https://www.yourstaffing.online',
-  process.env.FRONTEND_URL
-].filter(Boolean);
+const allowedOrigins = (process.env.CLIENT_URLS || process.env.CLIENT_URL || 'http://localhost:5173,http://127.0.0.1:5173,https://yourstaffing.online,https://www.yourstaffing.online')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
-app.use(
-  cors({
-    origin(origin, callback) {
-      if (!origin) return callback(null, true);
-
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-
-      return callback(new Error('Not allowed by CORS'));
-    },
-    credentials: true
-  })
-);
-
-
-app.use(express.json({ limit: '30mb' }));
-app.use('/uploads', express.static('uploads'));
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error(`CORS blocked for origin: ${origin}`));
+  },
+  credentials: true
+}));
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '30mb' }));
+app.use('/uploads', express.static(uploadDir));
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
 
 const PORT = process.env.PORT || 5000;
-const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret';
-const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8001';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error('JWT_SECRET is required. Configure backend/.env before starting the server.');
+}
+
+// Local AI service: http://127.0.0.1:8001
+// Production on yourstaffing.online server: keep AI behind localhost and proxy only if needed.
+const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://127.0.0.1:8001';
 const MATCH_THRESHOLD = Number(process.env.MATCH_THRESHOLD || 0.42);
 const DUPLICATE_BLOCK_SECONDS = Number(process.env.DUPLICATE_BLOCK_SECONDS || 30);
 const LIVENESS_REQUIRED = process.env.LIVENESS_REQUIRED === '1';
@@ -140,7 +145,7 @@ function getMasterConfig(type) {
 
 
 function signToken(user) {
-  return jwt.sign({ id: user.id, role: user.role, company_id: user.company_id, employee_id: user.employee_id, location_id: user.location_id }, JWT_SECRET, { expiresIn: '12h' });
+  return jwt.sign({ id: user.id, role: user.role, company_id: user.company_id, employee_id: user.employee_id, location_id: user.location_id }, JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '12h' });
 }
 
 function auth(requiredRoles = []) {
@@ -1931,7 +1936,7 @@ app.post(
       if (bestDistance <= threshold) {
         return ok(res, {
           matched: true,
-          message: 'Face matched successfully. Attendance ke liye face ready hai.',
+          message: 'Face matched successfully. This employee is ready for attendance.',
           employee,
           distance: bestDistance,
           threshold
@@ -1941,7 +1946,7 @@ app.post(
       return ok(res, {
         matched: false,
         message:
-          'Face enrolled sample se match nahi hua. Better lighting me 3-5 samples fir se enroll karein.',
+          'The captured face does not match the enrolled samples. Re-enroll 3 to 5 clear samples in better lighting.',
         employee,
         distance: bestDistance,
         threshold
@@ -2890,32 +2895,6 @@ async function ensureEnterpriseSchema() {
     CREATE TABLE IF NOT EXISTS master_attendance_modes (
       id SERIAL PRIMARY KEY, name VARCHAR(120) UNIQUE NOT NULL, code VARCHAR(60), requires_face BOOLEAN DEFAULT TRUE, requires_location BOOLEAN DEFAULT TRUE, description TEXT, status BOOLEAN DEFAULT TRUE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
-
-    ALTER TABLE master_industry_types ADD COLUMN IF NOT EXISTS code VARCHAR(60);
-    ALTER TABLE master_industry_types ADD COLUMN IF NOT EXISTS description TEXT;
-    ALTER TABLE master_industry_types ADD COLUMN IF NOT EXISTS status BOOLEAN DEFAULT TRUE;
-    ALTER TABLE master_industry_types ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
-
-    ALTER TABLE master_company_sizes ADD COLUMN IF NOT EXISTS code VARCHAR(60);
-    ALTER TABLE master_company_sizes ADD COLUMN IF NOT EXISTS min_employees INT;
-    ALTER TABLE master_company_sizes ADD COLUMN IF NOT EXISTS max_employees INT;
-    ALTER TABLE master_company_sizes ADD COLUMN IF NOT EXISTS description TEXT;
-    ALTER TABLE master_company_sizes ADD COLUMN IF NOT EXISTS status BOOLEAN DEFAULT TRUE;
-    ALTER TABLE master_company_sizes ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
-
-    ALTER TABLE master_leave_types ADD COLUMN IF NOT EXISTS code VARCHAR(60);
-    ALTER TABLE master_leave_types ADD COLUMN IF NOT EXISTS paid_leave BOOLEAN DEFAULT TRUE;
-    ALTER TABLE master_leave_types ADD COLUMN IF NOT EXISTS annual_quota NUMERIC(8,2) DEFAULT 0;
-    ALTER TABLE master_leave_types ADD COLUMN IF NOT EXISTS description TEXT;
-    ALTER TABLE master_leave_types ADD COLUMN IF NOT EXISTS status BOOLEAN DEFAULT TRUE;
-    ALTER TABLE master_leave_types ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
-
-    ALTER TABLE master_attendance_modes ADD COLUMN IF NOT EXISTS code VARCHAR(60);
-    ALTER TABLE master_attendance_modes ADD COLUMN IF NOT EXISTS requires_face BOOLEAN DEFAULT TRUE;
-    ALTER TABLE master_attendance_modes ADD COLUMN IF NOT EXISTS requires_location BOOLEAN DEFAULT TRUE;
-    ALTER TABLE master_attendance_modes ADD COLUMN IF NOT EXISTS description TEXT;
-    ALTER TABLE master_attendance_modes ADD COLUMN IF NOT EXISTS status BOOLEAN DEFAULT TRUE;
-    ALTER TABLE master_attendance_modes ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS trial_start DATE;
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS trial_end DATE;
